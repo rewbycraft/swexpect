@@ -42,7 +42,7 @@ impl SwitchExpect {
         &mut self,
         needle: &ReadUntil,
     ) -> SwitchExpectResult<(String, String)> {
-        let mut interval = tokio::time::interval(self.timeout.unwrap_or(Duration::from_secs(u64::max_value())));
+        let mut interval = tokio::time::interval(self.timeout.unwrap_or(Duration::MAX));
         interval.tick().await;
         loop {
             let mut data = [0u8; 128];
