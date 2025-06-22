@@ -2,6 +2,7 @@ use crate::error::{SwitchExpectError, SwitchExpectResult};
 use crate::hay::ReadUntil;
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::time::Interval;
 
 pub mod error;
 pub mod hay;
@@ -42,8 +43,10 @@ impl SwitchExpect {
         &mut self,
         needle: &ReadUntil,
     ) -> SwitchExpectResult<(String, String)> {
-        let mut interval = tokio::time::interval(self.timeout.unwrap_or(Duration::MAX));
-        interval.tick().await;
+        let mut interval: Option<Interval> = self.timeout.map(|d| tokio::time::interval(d));
+        if let Some(interval) = &mut interval {
+            interval.tick().await;
+        }
         loop {
             let mut data = [0u8; 128];
             tokio::select! {
@@ -56,7 +59,7 @@ impl SwitchExpect {
                         return Ok((first, second));
                     }
                 },
-                _ = interval.tick() => {
+                _ = interval.as_mut().unwrap().tick(), if interval.is_some() => {
                     return Err(SwitchExpectError::ExpectTimeout);
                 },
             }
