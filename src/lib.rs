@@ -2,7 +2,6 @@ use crate::error::{SwitchExpectError, SwitchExpectResult};
 use crate::hay::ReadUntil;
 use std::time::Duration;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
-use tokio::time::Interval;
 
 pub mod error;
 pub mod hay;
@@ -17,7 +16,10 @@ pub struct SwitchExpect {
 }
 
 impl SwitchExpect {
-    pub fn new<IO: 'static + AsyncRead + AsyncWrite + Unpin  + Send + Sync>(io: IO, timeout: Option<Duration>) -> SwitchExpect {
+    pub fn new<IO: 'static + AsyncRead + AsyncWrite + Unpin + Send + Sync>(
+        io: IO,
+        timeout: Option<Duration>,
+    ) -> SwitchExpect {
         SwitchExpect {
             io: Box::new(io),
             buffer: String::new(),
@@ -39,30 +41,25 @@ impl SwitchExpect {
         self.expect(&ReadUntil::String(s.to_string())).await
     }
 
-    pub async fn expect(
-        &mut self,
-        needle: &ReadUntil,
-    ) -> SwitchExpectResult<(String, String)> {
-        let mut interval: Option<Interval> = self.timeout.map(|d| tokio::time::interval(d));
-        if let Some(interval) = &mut interval {
-            interval.tick().await;
-        }
-        loop {
-            let mut data = [0u8; 128];
-            tokio::select! {
-                res = self.io.read(&mut data) => {
-                    let res = res?;
-                    self.buffer.extend(String::from_utf8_lossy(&data[..res]).chars());
-                    if let Some((left, right)) = hay::find(needle, &self.buffer, false) {
-                        let first = self.buffer.drain(..left).collect();
-                        let second = self.buffer.drain(..right - left).collect();
-                        return Ok((first, second));
-                    }
-                },
-                _ = interval.as_mut().unwrap().tick(), if interval.is_some() => {
-                    return Err(SwitchExpectError::ExpectTimeout);
-                },
+    pub async fn expect(&mut self, needle: &ReadUntil) -> SwitchExpectResult<(String, String)> {
+        let inner = async {
+            loop {
+                let mut data = [0u8; 128];
+                let res = self.io.read(&mut data).await?;
+                self.buffer
+                    .extend(String::from_utf8_lossy(&data[..res]).chars());
+                if let Some((left, right)) = hay::find(needle, &self.buffer, false) {
+                    let first = self.buffer.drain(..left).collect();
+                    let second = self.buffer.drain(..right - left).collect();
+                    return Ok((first, second));
+                }
             }
+        };
+        if let Some(duration) = self.timeout {
+            tokio::time::timeout(duration, inner).await
+                .map_err(|_| SwitchExpectError::ExpectTimeout)?
+        } else {
+            inner.await
         }
     }
 
@@ -87,5 +84,4 @@ impl SwitchExpect {
         self.io.flush().await?;
         Ok(())
     }
-
 }
